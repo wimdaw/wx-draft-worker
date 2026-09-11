@@ -166,6 +166,12 @@ html:focus-within { scroll-behavior: smooth; }
 input, textarea, select {
   width: 100%; height: var(--control-h); padding-inline: var(--space-xs); border: .0625rem solid var(--color-rule-2); border-radius: var(--radius-control); outline: .125rem solid transparent; outline-offset: .0625rem; background: var(--color-paper); color: var(--color-ink); transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
+/* 复选框 / 单选框不应继承输入框的整行尺寸与边框（否则会被撑成一个大方框） */
+input[type='checkbox'], input[type='radio'] {
+  width: 1rem; height: 1rem; min-height: 0; padding: 0; border: 0; border-radius: 0; background: none; flex: 0 0 auto; accent-color: var(--color-accent); cursor: pointer;
+}
+/* 行内复选 + 说明文字 */
+.check-inline { display: inline-flex; align-items: center; gap: var(--space-3xs); min-height: var(--control-h); color: var(--color-ink-2); font-size: var(--text-xs); font-weight: 500; cursor: pointer; }
 input::placeholder, textarea::placeholder { color: var(--color-muted); opacity: .82; }
 input:focus-visible, textarea:focus-visible, select:focus-visible { border-color: var(--color-ink-2); outline: .125rem solid var(--color-focus); outline-offset: .0625rem; }
 input[aria-invalid='true'], textarea[aria-invalid='true'], select[aria-invalid='true'] { border-color: var(--color-danger); background: var(--color-danger-soft); }
