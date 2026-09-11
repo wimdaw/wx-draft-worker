@@ -23,13 +23,14 @@ function check(name, cond, extra = '') {
 async function call(path, opts = {}, env = {}) {
   const req = new Request('https://worker.test' + path, opts)
   const resp = await worker.fetch(req, env)
+  const text = await resp.clone().text()
   let body = null
   try {
-    body = await resp.json()
+    body = JSON.parse(text)
   } catch (e) {
     body = null
   }
-  return { status: resp.status, body, headers: resp.headers }
+  return { status: resp.status, body, headers: resp.headers, text }
 }
 
 console.log('== wx-draft-worker 冒烟测试 ==\n')
@@ -37,8 +38,8 @@ console.log('== wx-draft-worker 冒烟测试 ==\n')
 // 1) 健康检查
 let r = await call('/')
 check('GET / 返回 200', r.status === 200, JSON.stringify(r.body))
-check('service 名称正确', r.body?.data?.service === 'wx-draft-worker')
-check('未配置 AppID 时 appid_configured=false', r.body?.data?.appid_configured === false)
+check('首页返回 HTML 产品页', /text\/html/.test(r.headers.get('content-type') || '') && /草稿推送网关|wx-draft-worker/.test(r.text || ''))
+check('未配置 AppID 时 /api/health 报未配置', (await call('/api/health')).body?.data?.appid_configured === false)
 
 r = await call('/api/health')
 check('GET /api/health 返回 200', r.status === 200)
@@ -55,7 +56,7 @@ r = await call('/api/draft', {
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ title: 'x' }),
 }, envFake)
-check('缺少 content 报错', r.status === 500 && /content/.test(r.body?.error || ''))
+check('缺少 content 报错(400)', r.status === 400 && /content/.test(r.body?.error || ''))
 
 r = await call('/api/draft', { method: 'POST', body: '{bad json' })
 check('非法 JSON 返回 400', r.status === 400)
@@ -69,14 +70,14 @@ r = await call('/api/draft', { method: 'POST', body: '{}' }, envKey)
 check('鉴权响应含提示', /未授权/.test(r.body?.error || ''))
 
 r = await call('/api/draft?key=secret-key', { method: 'POST', body: '{}' }, envKey)
-check('query key 通过鉴权(进到业务层)', r.status === 500)
+check('query key 通过鉴权(不被 401 拦截)', r.status !== 401)
 
 r = await call('/api/draft', {
   method: 'POST',
   headers: { 'x-api-key': 'secret-key' },
   body: '{}',
 }, envKey)
-check('请求头 key 通过鉴权', r.status === 500)
+check('请求头 key 通过鉴权(不被 401 拦截)', r.status !== 401)
 
 r = await call('/', {}, envKey)
 check('健康检查无需鉴权', r.status === 200)
@@ -93,6 +94,40 @@ r = await call('/api/draft', {
   body: JSON.stringify({ title: 't', content: '<p>hi</p>' }),
 })
 check('未配置 AppID 时报配置错误', r.status === 500 && /WECHAT_APPID/.test(r.body?.error || ''))
+
+// 7) 开放模式的边界：没设 env 密钥，但后台已创建令牌 → 仍必须鉴权
+const mockDB = {
+  prepare(sql) {
+    const stmt = {
+      bind(...args) { stmt._args = args; return stmt },
+      async first() {
+        if (/FROM tokens WHERE key/.test(sql)) {
+          const key = (stmt._args || [])[0]
+          if (key !== 'db-token') return null
+          return { id: 't1', name: '后台令牌', key: 'db-token', enabled: 1, use_count: 0, created_at: '', last_used_at: null }
+        }
+        if (/FROM tokens/.test(sql)) return { total: 1, enabled: 1 }
+        return {}
+      },
+      async all() { return { results: [] } },
+      async run() { return { success: true } },
+    }
+    return stmt
+  },
+}
+const envDb = { DB: mockDB, WECHAT_APPID: '', WECHAT_APPSECRET: '' }
+
+r = await call('/api/draft', { method: 'POST', body: '{}' }, envDb)
+check('有后台令牌时无 key 返回 401（不进入开放模式）', r.status === 401)
+
+r = await call('/api/draft?key=db-token', { method: 'POST', body: '{}' }, envDb)
+check('后台令牌可正常通过鉴权', r.status !== 401)
+
+r = await call('/api/draft?key=wrong-key', { method: 'POST', body: '{}' }, envDb)
+check('错误令牌被拒 401', r.status === 401)
+
+r = await call('/api/health', {}, envDb)
+check('有令牌时健康检查仍无需鉴权', r.status === 200)
 
 console.log(`\n结果: ${pass} 通过 / ${fail} 失败`)
 process.exit(fail ? 1 : 0)
