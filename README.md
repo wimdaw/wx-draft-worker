@@ -288,6 +288,11 @@ node scripts/smoke.mjs ../dist/pages/_worker.js
 
 之后 push 到 `main` 即自动构建并部署。Pages 项目名在 `pages.yml` 的 `--project-name=` 处修改（首次执行会自动创建项目）。
 
+> ⚠️ 用 API / 脚本推送代码时若 `.github/workflows/*` 返回 **404**，说明所用 GitHub Token 缺少 **workflow** 权限
+> （classic token 需勾选 `workflow`；fine-grained 需 *Workflows: Read and write*）。网页端手动上传不受此限制。
+> 为此，本仓库根目录的 **`ci-templates/`** 保留了两份工作流副本：把它们复制到 `.github/workflows/` 即可启用
+> （或换成带 `workflow` 权限的 Token 重新推送）。
+
 ### Pages 与 Workers 的差异（务必了解）
 
 | 项 | Workers | Pages |
