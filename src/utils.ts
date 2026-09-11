@@ -19,7 +19,7 @@ export function json(
 }
 
 /** 统一成功响应 */
-export function ok(data: Record<string, unknown> = {}, status = 200): Response {
+export function ok(data: unknown = {}, status = 200): Response {
   return json({ ok: true, data }, status)
 }
 
