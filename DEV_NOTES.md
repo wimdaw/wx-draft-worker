@@ -395,4 +395,41 @@ node scripts/smoke.mjs ../dist/pages/_worker.js
 
 `.github/workflows/pages.yml`：push 到 `main`（且改动 `src/**`、构建脚本、`package.json`、本工作流）时，
 `npm run build` → `wrangler pages deploy dist/pages --project-name=wx-draft-worker --branch=main`，
-复用既有的 `CF_API_TOKEN` / `CF_ACCOUNT_ID` 两个仓库 Secret（与 `deploy.yml` 相同）。
+复用既有的 `CF_API_TOKEN` / `CF_ACCOUNT_ID` 仓库 Secret（与 `deploy.yml` 相同）。
+
+---
+
+## 5. v2.5.0：公众号名称自动识别 + 表单样式修复
+
+**需求**：公众号管理里只填 AppID / AppSecret 就应自动识别出公众号名字（不必再手填备注名）；「设为默认公众号」的复选框被撑得过大。
+
+**实现**
+- `src/wechat.ts` 新增 `getAccountNickName()`：`GET /cgi-bin/account/getaccountbasicinfo?access_token=…` → 取 `nick_name`。
+  ⚠️ 该接口对未认证 / 无权限的号会返回 `48001` 之类错误，因此实现为**失败返回 `null` 而不抛异常**，以免把「凭据有效但读不到昵称」误判成校验失败。
+- `src/admin.ts`：`probeAccount()` 返回 `{ draftTotal, nickName }`（原来是裸的草稿数）；
+  `POST /accounts`、`PUT /accounts/:id` 的命名优先级 = **用户填写 > 微信昵称 > `公众号 <appid 后 6 位>`**；
+  `POST /accounts/:id/test` 除探测连通外还会把读到的新昵称**回写数据库**（老数据里的「公众号 1」点一次「测试连通」即自动纠正）。
+- `src/admin_app.ts`：表单改为 AppID + AppSecret 并排、名称降级为「名称（可选）」并注明「留空则自动读取公众号昵称」；
+  列表框表头改「公众号名称」；提示文案同步；复选框套用新的 `.check-inline`。
+- `src/pages.css.ts`：**根因修复**——全局规则
+  `input, textarea, select { width: 100%; height: var(--control-h); border: … }`
+  会把 `type=checkbox` 的复选框也撑成整行大方框。新增：
+  ```css
+  input[type='checkbox'], input[type='radio'] {
+    width: 1rem; height: 1rem; min-height: 0; padding: 0; border: 0; border-radius: 0; background: none;
+  }
+  .check-inline { display: inline-flex; align-items: center; gap: var(--space-3xs); min-height: var(--control-h); }
+  ```
+
+**验证（均为实测，非推断）**
+- `tsc --noEmit` rc=0；冒烟 `20 通过 / 0 失败` × 两个入口（`dist/worker.js`、`dist/pages/_worker.js`）。
+- 线上真机：登录后台 → `POST /admin/api/accounts/<id>/test` → `{"account":"百晓文苑","nickname":"百晓文苑","draft_total":2,…}`，随后列表接口的 `name` 已从「默认公众号」变为「百晓文苑」→ 证明**自动识别与回写都真的生效**。
+- 样式硬验证（CDP 直连 headless Edge，带登录 Cookie 打开 `#accounts` 视图读 `getComputedStyle`）：
+  `#acc-default` → `16×16px / min-height:0px / border-width:0px`，`.check-inline` → `display:flex; align-items:center`，
+  表头 `["公众号名称","AppID","AppSecret","状态","添加时间","操作"]`，输入框 `acc-appid / acc-secret / acc-name(留空则自动读取公众号昵称)`。
+
+**踩坑**
+- `scripts/smoke.mjs` 的 D1 mock 对 `FROM tokens` 返回 `{ total, enabled }`，而实现用的是 `SELECT COUNT(*) AS n …` 取 `row.n`
+  → 判定「无令牌」进入开放模式，用例假失败（期望 401 得到 400）。**mock 必须与实现的字段名严格一致**；已补 `n: 1`。
+- 修改文案时注意：`admin_app.ts` 里的 HTML 是**逐行字符串拼接**，`old_content` 不能凭印象补引号（首次 patch 因多加一个 `'` 而失败）。
+- 线上 Worker 必须用**浏览器 UA** 访问（`*.workers.dev` 的 1010 Bot 检测无法关闭），脚本请求务必带 Chrome UA。
