@@ -53,6 +53,26 @@ export class WeChat {
     return data.access_token
   }
 
+  /**
+   * 读取公众号昵称（账号基本信息接口）
+   * 需账号具备该接口权限：未认证 / 未授权的号可能返回 48001 等错误
+   * → 因此这里不抛异常，失败时返回 null，由调用方决定兜底名称
+   */
+  async getAccountNickName(): Promise<string | null> {
+    try {
+      const token = await this.getToken()
+      const resp = await fetch(
+        `${WX_BASE}/cgi-bin/account/getaccountbasicinfo?access_token=${encodeURIComponent(token)}`,
+      )
+      const data = (await resp.json()) as WxBaseResponse & { nick_name?: string; nickname?: string }
+      if ((data as { errcode?: number }).errcode) return null
+      const nick = String(data.nick_name ?? data.nickname ?? '').trim()
+      return nick || null
+    } catch {
+      return null
+    }
+  }
+
   /** 上传正文图片 → 返回可用于正文的微信域名 URL（临时素材） */
   async uploadContentImage(blob: Blob, filename = 'image.png'): Promise<string> {
     const token = await this.getToken()
