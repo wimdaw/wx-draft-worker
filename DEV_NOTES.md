@@ -106,10 +106,32 @@ node scripts/smoke.mjs ../.node-test/index.mjs    # 冒烟：TS 版
 
 ## 7. 尚未完成 / 下一步
 
-- [x] ~~加入 Cloudflare IP 白名单~~（已完成，白名单生效后推送立即成功）
-- [ ] ⚠️ **安全**：当前 `auth_enabled: false`，URL 公开可被任意调用 → 建议配置 `DRAFT_API_KEY`
-- [ ] 可选：清理测试草稿（`DELETE /api/drafts/:mediaId`）
-- [ ] 可选：推送 GitHub / 绑定自定义域名
+- [x] ~~加入 Cloudflare IP 白名单~~（**已完成**，白名单生效后推送立即成功）
+- [x] ~~配置 `DRAFT_API_KEY` 开启鉴权~~（**已完成**：无 key → 401，带 key → 200）
+- [x] ~~清理测试草稿~~（**已完成**，`DELETE /api/drafts/:mediaId` 返回 200，用户原创草稿未受影响）
+- [x] ~~推送 GitHub~~（**已完成** → https://github.com/wimdaw/wx-draft-worker ，19/20 文件）
+
+### ⚠️ 唯一遗留项：CI 工作流文件未上传
+
+`.github/workflows/deploy.yml` 推送失败（HTTP 404）—— 你的 GitHub token 缺少 **`workflow`** scope，
+GitHub 会对此类路径直接返回 404。该文件仅用于「push 到 main 自动部署」（可选功能），**不影响任何实际运行**。
+
+补齐方式（任选其一）：
+1. 在 GitHub 网页上手动新建该文件（内容见本地项目 `.github/workflows/deploy.yml`）；
+2. 给 token 加上 `workflow` scope 后让我重推；
+3. 不用也没关系——日常改动用 `wrangler deploy` 手动部署即可。
+
+## 8. 交付状态总览（2026-09-11 全部完成）
+
+| 项目 | 状态 |
+|---|---|
+| 代码（TS + Hono，CF Workers） | ✅ 单文件 `dist/worker.js`，已部署 |
+| 线上地址 | ✅ https://wx-draft-worker.xwse.workers.dev |
+| 微信凭据（加密变量） | ✅ `WECHAT_APPID` / `WECHAT_APPSECRET` |
+| IP 白名单 | ✅ 已加 CF 段 |
+| **端到端真实推送** | ✅ **成功**（media_id `JYYmKckE…wyQGT`，已交叉核实，测试草稿已删） |
+| 接口鉴权 | ✅ `DRAFT_API_KEY` 已启用（`auth_enabled: true`） |
+| GitHub 仓库 | ✅ https://github.com/wimdaw/wx-draft-worker （19/20 文件；缺 CI 工作流文件） |
 - [ ] 可选：配置 `DRAFT_API_KEY` 开启调用鉴权
 - [ ] 可选：绑定自定义域名（可关闭 Bot 检测，不依赖 UA 规避）
 - [ ] 可选：CI 自动跑冒烟测试（`.github/workflows/deploy.yml` 已含 typecheck）
