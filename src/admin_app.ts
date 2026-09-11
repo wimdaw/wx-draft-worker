@@ -367,26 +367,26 @@ export const ADMIN_JS = `
       '<div class="admin-heading"><h1>公众号管理</h1><div class="sp">' +
         '<span class="muted">已添加 ' + list.length + ' 个</span>' +
         '<button class="btn btn-s" id="acc-refresh">刷新</button></div></div>' +
-      '<div class="notice info">在这里添加要推送的公众号：填微信后台的 <b>AppID</b> 与 <b>AppSecret</b> 即可。<b>推送时未指定公众号，就发到标「默认」的那个</b>。记得先把 Cloudflare 出口 IP 加入微信 IP 白名单，否则会报 invalid ip。</div>' +
+      '<div class="notice info">在这里添加要推送的公众号：填微信后台的 <b>AppID</b> 与 <b>AppSecret</b> 即可，<b>公众号名称会自动读出来</b>，不用手填。<b>推送时未指定公众号，就发到标「默认」的那个</b>。记得先把 Cloudflare 出口 IP 加入微信 IP 白名单，否则会报 invalid ip。</div>' +
       '<div class="panel">' +
         '<div class="panel-head"><h3 id="acc-form-title">添加公众号</h3></div>' +
         '<div class="row">' +
-          '<div class="field"><label>名称（备注）</label><input class="input" id="acc-name" placeholder="例如：主号 / 测试号"></div>' +
           '<div class="field"><label>AppID</label><input class="input" id="acc-appid" placeholder="wx 开头的 18 位字符" autocomplete="off"></div>' +
+          '<div class="field"><label>AppSecret</label><input class="input" id="acc-secret" placeholder="32 位字符，保存时会向微信校验" autocomplete="new-password"></div>' +
         '</div>' +
         '<div class="row">' +
-          '<div class="field"><label>AppSecret' + '</label><input class="input" id="acc-secret" placeholder="32 位字符，保存时会向微信校验" autocomplete="new-password"></div>' +
-          '<div class="field"><label>选项</label><label class="muted" style="display:block;padding-top:10px"><input type="checkbox" id="acc-default"> 设为默认公众号</label></div>' +
+          '<div class="field"><label>名称（可选）</label><input class="input" id="acc-name" placeholder="留空则自动读取公众号昵称"></div>' +
+          '<div class="field"><label>选项</label><label class="check-inline"><input type="checkbox" id="acc-default"><span>设为默认公众号（推送未指定时使用）</span></label></div>' +
         '</div>' +
         '<div class="sp">' +
           '<button class="btn btn-p" id="acc-save">添加并校验</button>' +
           '<button class="btn btn-s" id="acc-cancel" style="display:none">取消编辑</button>' +
         '</div>' +
-        '<p class="muted" style="margin:12px 0 0">保存时会真实调用微信接口校验凭据并读取草稿数，校验通过才写入数据库。</p>' +
+        '<p class="muted" style="margin:12px 0 0">保存时会真实调用微信接口校验凭据、读取草稿数，并自动识别公众号昵称（未认证号可能读取失败，可在「编辑」里手动填名称）。</p>' +
       '</div>' +
       '<div class="panel panel-flush">' +
         (list.length
-          ? '<table class="tb"><thead><tr><th>名称</th><th>AppID</th><th>AppSecret</th><th>状态</th><th>添加时间</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table>'
+          ? '<table class="tb"><thead><tr><th>公众号名称</th><th>AppID</th><th>AppSecret</th><th>状态</th><th>添加时间</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table>'
           : '<div class="empty-state">还没有公众号，请在上方添加第一个。</div>') +
       '</div>';
   }
