@@ -4,12 +4,72 @@
 
 /** Worker 绑定与环境变量 */
 export interface Env {
+  /** D1 数据库（令牌 / 推送记录 / 设置 / 会话） */
+  DB: D1Database
   /** 公众号 AppID */
   WECHAT_APPID: string
   /** 公众号 AppSecret（机密） */
   WECHAT_APPSECRET: string
-  /** 调用鉴权密钥；留空/未设置表示不鉴权 */
+  /** 后台管理员密码；未设置时回落到默认值（首次登录后请尽快修改） */
+  ADMIN_PASSWORD?: string
+  /** 后台管理员账号；未设置时回落到默认值 admin */
+  ADMIN_USER?: string
+  /** 旧版单一调用密钥；设置后兼容校验（等价于一把内置令牌） */
   DRAFT_API_KEY?: string
+}
+
+/** API 令牌 */
+export interface Token {
+  id: string
+  name: string
+  key: string
+  enabled: number
+  created_at: string
+  last_used_at: string | null
+  use_count: number
+}
+
+/** 推送记录 */
+export interface DraftRecord {
+  id: string
+  media_id: string | null
+  title: string
+  author: string
+  status: 'success' | 'failed'
+  error: string | null
+  duration_ms: number
+  images: number
+  content_len: number
+  token_name: string | null
+  /** 推送所用的公众号名（多公众号分类） */
+  account_name?: string | null
+  created_at: string
+}
+
+/** 公众号账号（后台可添加多个，草稿箱按此分类） */
+export interface Account {
+  id: string
+  name: string
+  appid: string
+  appsecret: string
+  enabled: number
+  is_default: number
+  created_at: string
+}
+
+/** 后台概览统计 */
+export interface Stats {
+  total: number
+  success: number
+  failed: number
+  success_rate: number
+  avg_duration_ms: number
+  today: number
+  tokens: number
+  tokens_enabled: number
+  appid_configured: boolean
+  secret_configured: boolean
+  daily: Array<{ date: string; total: number; success: number }>
 }
 
 /** POST /api/draft 请求体 */
@@ -32,6 +92,8 @@ export interface DraftRequest {
   needOpenComment?: 0 | 1
   /** 1 = 仅粉丝可评论（默认 0） */
   onlyFansCanComment?: 0 | 1
+  /** 目标公众号账号 id（缺省用后台设置的默认公众号） */
+  accountId?: string
 }
 
 /** 微信 API 通用响应字段 */
