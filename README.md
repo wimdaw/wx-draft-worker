@@ -1,6 +1,6 @@
 # wx-draft-worker
 
-基于 **Cloudflare Workers + Hono** 的微信公众号草稿推送网关 —— 免服务器、免备案、长期有效。
+基于 **Cloudflare Workers + Hono + D1** 的**微信公众号草稿推送网关 + 可视化管理后台** —— 免服务器、免备案、长期有效。
 
 把一篇文章（标题 + 正文 + 封面）POST 给它，它会自动：
 
@@ -10,43 +10,75 @@
 4. 调用草稿箱接口**新建草稿**，返回 `media_id`
 
 > 本项目沿用 [ai-gateway](https://github.com/wimdaw/ai-gateway) 的技术栈与工程规范：
-> TypeScript + Hono + Cloudflare Workers + GitHub Actions 自动部署。
+> TypeScript + Hono + Cloudflare Workers，并在 **v2.0.0** 起对齐其「产品首页 + 管理后台 + API 令牌」的完整形态。
+
+| 线上地址 | https://wx-draft-worker.xwse.workers.dev |
+|---|---|
+| 产品首页 | `GET /` |
+| 管理后台 | `GET /admin`（登录页 `/admin/login`） |
 
 ---
 
 ## 功能特性
 
+### 推送能力
 - **一条 API 建草稿** —— `POST /api/draft`，字段与云托管版/Flask 版完全一致
 - **图片自动转存** —— 正文外链图、data URI 图自动上传到微信域名
 - **封面智能回退** —— 未传 `cover` 时自动取正文第一张图作为封面
-- **Markdown 支持** —— `contentType: "markdown"` 时自动转 HTML
-- **简单鉴权** —— `X-API-Key` 请求头或 `?key=` 查询参数（可留空开放）
+- **内容格式自动识别** —— `contentType` 可省略：含 HTML 标签原样使用，否则按 Markdown 渲染
 - **配套接口** —— 草稿列表 `GET /api/drafts`、删除草稿 `DELETE /api/drafts/:mediaId`
 - **错误可读** —— 微信 `errcode` 映射为中文提示（如 40164 → IP 不在白名单）
-- **零依赖构建** —— 无打包步骤，`wrangler` 直接部署 TS
+
+### 管理后台（v2.0.0 新增，ai-gateway 同款）
+- **产品首页** —— Hero、特性介绍、快速开始、接口文档，可对外展示
+- **密码登录** —— 会话 ID 存于 D1（随机生成，7 天过期自动清理），Cookie 为 HttpOnly / SameSite=Lax / HTTPS 时 Secure；密码比较先做 SHA-256 摘要再定长比较，防时序攻击
+- **概览看板** —— 累计推送 / 成功 / 失败 / 成功率 / 今日推送 / 平均耗时 / 令牌数 + 近 7 天趋势
+- **令牌管理** —— 创建 / 启停 / 删除 API 令牌，支持备注与调用次数统计
+- **推送记录** —— 每次推送的状态、耗时、图片数、内容长度、token 归属、失败原因，可清空
+- **微信草稿箱** —— 直接读取公众号草稿箱并支持删除
+- **在线试用** —— 在后台直接填标题/正文/封面发起真实推送，即时看结果
+- **设置** —— 公众号 AppID 脱敏展示、鉴权开关、后台改密码
+
+### 令牌体系（ai-gateway 同款）
+- 业务接口用 **`X-API-Key: wxk_xxx`** 鉴权（兼容旧 `?key=` 与旧 `DRAFT_API_KEY`）
+- 旧密钥会在首次访问时**自动迁移**为一个可用令牌，无需改调用方
+- 令牌可随时在后台禁用，禁用后立即失效
+
+---
 
 ## 目录结构
 
 ```
 wx-draft-worker/
 ├── src/
-│   ├── index.ts     # Hono 应用与路由
-│   ├── types.ts     # 类型定义（Env / 请求体 / 微信响应）
-│   ├── wechat.ts    # 微信 API 客户端（token/上传/草稿）
-│   ├── auth.ts      # API Key 鉴权中间件
-│   ├── images.ts    # 图片处理（data URI / URL → Blob）
-│   ├── markdown.ts  # 极简 Markdown → HTML
-│   └── utils.ts     # 响应封装、微信错误码映射
+│   ├── index.ts      # Hono 应用与路由挂载
+│   ├── types.ts      # 类型定义（Env / 请求体 / 微信响应）
+│   ├── wechat.ts     # 微信 API 客户端（token/素材/草稿）
+│   ├── auth.ts       # 后台会话登录 + API 令牌鉴权中间件
+│   ├── draft.ts      # 推送核心流程（渲染 → 图片本地化 → 封面 → 建草稿 → 落库）
+│   ├── storage.ts    # D1 存储层（令牌/记录/设置/统计，首次访问自动建表）
+│   ├── admin.ts      # 后台 API（Hono 子应用，挂载于 /admin/api）
+│   ├── admin_app.ts  # 后台前端 JS（单文件 SPA，由 /admin/app.js 输出）
+│   ├── pages.ts      # 服务端渲染页面（首页 / 登录页 / 后台骨架）
+│   ├── pages.css.ts  # 设计系统 CSS（深色主题）
+│   ├── images.ts     # 图片处理（data URI / URL → Blob）
+│   ├── markdown.ts   # 极简 Markdown → 微信内联样式 HTML
+│   └── utils.ts      # 响应封装、微信错误码映射
 ├── dist/
-│   └── worker.js      # ⭐ 单文件版（零依赖，可直接粘贴到 CF 控制台编辑器）
+│   ├── worker.js         # ⭐ 单文件版（零依赖，可直接粘贴到 CF 控制台编辑器）
+│   └── pages/_worker.js  # ⭐ Pages 版（Cloudflare Pages 高级模式入口）
 ├── scripts/
-│   ├── draft_push.py  # 本地推送脚本（可直接对接本 Worker）
-│   └── smoke.mjs      # 冒烟测试（本地执行 Worker 逻辑，无需账号/网络）
+│   ├── build.mjs         # 构建：一次产出上面两个产物（npm run build）
+│   ├── build-pages.mjs   # 只构建 Pages 产物（npm run build:pages）
+│   ├── draft_push.py     # 本地推送脚本（可直接对接本 Worker）
+│   └── smoke.mjs         # 冒烟测试（本地执行 Worker 逻辑，无需账号/网络）
 ├── examples/
-│   └── article.md     # 示例文章
-├── .github/workflows/deploy.yml
-├── API.md             # 接口文档（含请求/响应示例）
-├── DEV_NOTES.md       # 开发与验证记录（含踩坑经验）
+│   └── article.md      # 示例文章
+├── .github/workflows/
+│   ├── deploy.yml      # 自动部署到 Cloudflare Workers
+│   └── pages.yml       # 自动部署到 Cloudflare Pages
+├── API.md              # 接口文档（业务 API + 后台 API）
+├── DEV_NOTES.md        # 开发与验证记录（含踩坑经验）
 ├── wrangler.toml.example
 ├── package.json
 └── tsconfig.json
@@ -54,56 +86,111 @@ wx-draft-worker/
 
 ## 快速开始
 
-### 方式一：Cloudflare 控制台（免安装）
+### 1. 建库（D1）
 
-1. Workers & Pages → Create → Workers → 名称填 `wx-draft-worker` → Create
-2. 进入在线编辑器（Quick Edit），粘贴 `src/` 下代码（或打包后的单文件，见下）
-3. Settings → Variables and Secrets 添加：
-   - `WECHAT_APPID` = 你的 AppID（普通变量）
-   - `WECHAT_APPSECRET` = 你的 AppSecret（**Encrypt**）
-   - `DRAFT_API_KEY` = 一串自定义密钥（**Encrypt**，可留空）
-4. **加完变量后再点一次 Deploy**，否则 `env` 读不到
+```bash
+npx wrangler d1 create wx-draft-db
+# 把输出的 database_id 填进 wrangler.toml 的 [[d1_databases]]
+```
 
-### 方式二：Wrangler CLI
+> 数据表由程序在**首次请求时自动创建**，无需手工执行 SQL。
+
+### 2. 配密钥
+
+```bash
+npx wrangler secret put WECHAT_APPSECRET    # 公众号 AppSecret
+npx wrangler secret put ADMIN_PASSWORD      # 后台登录密码（v2.0.0 新增）
+npx wrangler secret put DRAFT_API_KEY       # 旧版密钥（可选，会自动迁移为令牌）
+```
+
+`WECHAT_APPID` 可写在 `wrangler.toml` 的 `[vars]` 里（非机密）。
+
+### 3. 部署
+
+**方式 A：Cloudflare Workers（默认）**
 
 ```bash
 npm install
-cp wrangler.toml.example wrangler.toml   # 按需修改 name
-npx wrangler secret put WECHAT_APPSECRET
-npx wrangler secret put DRAFT_API_KEY
-npx wrangler deploy
+npm run deploy          # 等价于 npx wrangler deploy
 ```
 
-### 方式三：GitHub Actions 自动部署
+部署后访问 `https://<你的子域>.workers.dev/admin`，用 `ADMIN_PASSWORD` 登录。
 
-1. 推送代码到 GitHub 仓库 `main` 分支
-2. 仓库 Settings → Secrets and variables → Actions 添加：
-   - `CF_API_TOKEN` — Cloudflare API Token（需 **Workers Scripts: Edit** 权限）
-   - `CF_ACCOUNT_ID` — Cloudflare 账户 ID
-3. 之后每次 push 自动部署（也可在 Actions 页手动 Run workflow）
+**方式 B：Cloudflare Pages（同一份代码，多一个入口域名）**
 
-> 机密变量（AppSecret / API Key）请在 **Cloudflare 控制台** 的 Variables and Secrets 里配置，
-> 不要写进仓库。若用 wrangler CLI，可用 `--secret` 注入。
+```bash
+npm run build           # 产出 dist/worker.js 与 dist/pages/_worker.js
+npx wrangler pages deploy dist/pages --project-name=wx-draft-worker
+```
+
+Pages 项目需在控制台补两处配置（与 Worker 完全一致）：
+
+1. **D1 绑定**：Pages 项目 → Settings → Functions → *D1 database bindings* → 变量名 `DB` → 选择 `wx-draft-db`
+2. **变量**：同一页面的 *Variables and Secrets* → 添加 `WECHAT_APPSECRET`、`ADMIN_PASSWORD` 等
+
+> ⚠️ 绑定/变量属于**部署级配置**，改完必须**重新部署一次**才生效。
+> ⚠️ `wrangler pages deploy` 会提示 `wrangler.toml` 缺少 `pages_build_output_dir` 并忽略该文件——这是预期行为，不影响部署。
+
+> 也可用 Cloudflare 控制台（Quick Edit 粘贴 `dist/worker.js`）或 GitHub Actions 自动部署，
+> 详见下方「部署方式详解」。
+
+## 管理后台
+
+| 页面 | 路径 |
+|------|------|
+| 产品首页 | `/` |
+| 登录 | `/admin/login` |
+| 概览 | `/admin#/` |
+| 令牌管理 | `/admin#/tokens` |
+| 推送记录 | `/admin#/records` |
+| 微信草稿箱 | `/admin#/drafts` |
+| 在线试用 | `/admin#/try` |
+| 接口文档 | `/admin#/docs` |
+| 设置 | `/admin#/settings` |
+
+**首次登录后建议**：到「设置」里确认 AppID 已识别、「鉴权开关」符合预期；
+到「令牌管理」创建一枚自己的令牌（也可直接用自动迁移生成的那枚）。
+
+## 接口一览
+
+### 业务接口
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|------|------|------|------|
+| GET | `/` | — | 产品首页 |
+| GET | `/api/health` | — | 健康检查（含 D1 连通状态） |
+| POST | `/api/draft` | 令牌 | 推送草稿 |
+| GET | `/api/drafts` | 令牌 | 微信草稿列表 |
+| DELETE | `/api/drafts/:mediaId` | 令牌 | 删除微信草稿 |
+
+### 后台接口（需登录会话）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/admin/login` | 登录（表单或 JSON），成功下发会话 Cookie |
+| GET | `/admin/logout` | 退出 |
+| GET | `/admin/api/stats` | 概览统计（含近 7 天趋势） |
+| GET / POST | `/admin/api/tokens` | 令牌列表 / 创建 |
+| PATCH / DELETE | `/admin/api/tokens/:id` | 启停 / 删除令牌 |
+| GET | `/admin/api/records` | 推送记录 |
+| DELETE | `/admin/api/records`、`/records/:id` | 清空 / 删除单条记录 |
+| GET / PUT | `/admin/api/settings` | 读取 / 更新设置 |
+| GET / PUT | `/admin/api/password` | 读取密码状态 / 修改密码 |
+| POST | `/admin/api/try` | 在线试用（真实推送） |
+| GET | `/admin/api/wx-drafts` | 微信草稿箱 |
+| DELETE | `/admin/api/wx-drafts/:mediaId` | 删除微信草稿 |
+
+详见 [API.md](./API.md)。
 
 ## 环境变量
 
 | 变量 | 必填 | 说明 |
 |------|------|------|
-| `WECHAT_APPID` | ✅ | 公众号 AppID |
-| `WECHAT_APPSECRET` | ✅ | 公众号 AppSecret（机密） |
-| `DRAFT_API_KEY` | ❌ | 调用鉴权密钥，留空则不鉴权 |
-
-## 接口一览
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/` | 健康检查 |
-| GET | `/api/health` | 配置检查（是否已配 AppID/Secret/鉴权） |
-| POST | `/api/draft` | 推送草稿 |
-| GET | `/api/drafts` | 草稿列表 |
-| DELETE | `/api/drafts/:mediaId` | 删除草稿 |
-
-详见 [API.md](./API.md)。
+| `WECHAT_APPID` | ✅ | 公众号 AppID（可放 `[vars]`） |
+| `WECHAT_APPSECRET` | ✅ | 公众号 AppSecret（**机密**） |
+| `ADMIN_PASSWORD` | ✅ | 后台登录密码（**机密**，v2.0.0 新增） |
+| `DRAFT_API_KEY` | ❌ | 旧版调用密钥；存在且库中无令牌时自动迁移为一枚令牌 |
+| `DB` | ✅ | D1 数据库绑定（`[[d1_databases]]`） |
 
 ## ⚠️ 两个必须做的配置（否则报错）
 
@@ -148,7 +235,7 @@ Worker 出口 IP 每次都可能不同，微信会拒绝。到
 
 ```bash
 export WX_DRAFT_URL="https://你的域名/api/draft"
-export WX_DRAFT_KEY="你的DRAFT_API_KEY"
+export WX_DRAFT_KEY="wxk_你的令牌"
 
 python scripts/draft_push.py \
   --file article.md \
@@ -160,26 +247,72 @@ python scripts/draft_push.py \
 `scripts/draft_push.py` 支持的字段：`title / author / digest / content / cover`
 （封面支持 data URI、远程图 URL、本地路径；正文 `<img>` 自动转微信域名）。
 
+> `contentType` 可省略：正文里没有 HTML 标签时，会自动按 Markdown 渲染。
+
 ## 本地自测（无需 Cloudflare 账号 / 无需网络）
 
 ```bash
 npm install
-npx tsc --noEmit                 # ① 类型检查
-node scripts/smoke.mjs           # ② 冒烟测试：单文件版 dist/worker.js
+npm run build                    # ① 产出 dist/worker.js + dist/pages/_worker.js
+npx tsc --noEmit                 # ② 类型检查
 
-# ③ 冒烟测试：TypeScript 版（esbuild 纯净打包后执行，16 项断言）
-npx esbuild src/index.ts --bundle --format=esm --platform=neutral \
-  --outfile=.node-test/index.mjs
-node scripts/smoke.mjs ../.node-test/index.mjs
+# ③ 冒烟测试：Workers 版 / Pages 版（各 20 项断言，两版实现均全绿）
+node scripts/smoke.mjs ../dist/worker.js
+node scripts/smoke.mjs ../dist/pages/_worker.js
 ```
 
 > 要求 Node.js **≥ 22**（wrangler 4.x 的硬性要求）。
-> 覆盖：路由/健康检查/404/参数校验/鉴权(401)/CORS/OPTIONS 等 16 项断言，两版实现均全绿。
+> 覆盖：路由 / 健康检查 / 404 / 参数校验 / 鉴权(401) / CORS / OPTIONS / 开放模式边界
+> 等 **20 项断言**。
+
+## 部署方式详解
+
+| 方式 | 适用场景 | 步骤 |
+|------|----------|------|
+| **A. Workers（CLI）** | 本地有 Node 环境，最常用 | `npm install && npm run deploy` |
+| **B. Pages（CLI）** | 想要 Pages 域名 / 静态托管生态，或作为 Workers 的备份入口 | `npm run build && npx wrangler pages deploy dist/pages --project-name=<项目名>` |
+| **C. Cloudflare 控制台** | 免安装、纯网页操作 | Workers & Pages → Create → 粘贴 `dist/worker.js`（Pages 则粘贴/上传 `dist/pages/_worker.js`）→ 配变量与 D1 → 再点一次 Deploy |
+| **D. GitHub Actions** | push 即自动部署 | 见下 |
+
+### GitHub Actions 自动部署（两种形态都已内置）
+
+- `.github/workflows/deploy.yml` → 自动部署 **Workers**
+- `.github/workflows/pages.yml` → 自动部署 **Pages**
+
+仓库 Settings → Secrets and variables → Actions 添加两个 Secret：
+
+| Secret | 说明 |
+|--------|------|
+| `CF_API_TOKEN` | Cloudflare API 令牌：需 *Workers Scripts: Edit*；要部署 Pages 还需 *Cloudflare Pages: Edit* |
+| `CF_ACCOUNT_ID` | Cloudflare 账户 ID |
+
+之后 push 到 `main` 即自动构建并部署。Pages 项目名在 `pages.yml` 的 `--project-name=` 处修改（首次执行会自动创建项目）。
+
+### Pages 与 Workers 的差异（务必了解）
+
+| 项 | Workers | Pages |
+|----|---------|-------|
+| 入口 | `dist/worker.js`（`wrangler.toml` 的 `main`） | `dist/pages/_worker.js`（高级模式固定文件名） |
+| 配置来源 | `wrangler.toml` + `wrangler secret put` | 控制台 Pages 项目 → Settings → Functions / Variables |
+| D1 绑定 | `[[d1_databases]]`（变量名 `DB`） | Settings → Functions → **D1 database bindings**，变量名 `DB` |
+| 改完配置 | 重新 `wrangler deploy` | 绑定/变量属部署级配置，需**重新部署**才生效 |
+| 访问域名 | `<子域>.workers.dev` / 自定义域 | `<项目名>.pages.dev` / 自定义域 |
+| 代码 | 完全相同（同一份 Hono 应用，两种产物只是打包路径不同） | 同上 |
+
+## 多公众号（后台管理）
+
+后台「公众号管理」可添加任意数量的公众号（AppID + AppSecret），保存时会**真实调用微信接口校验**；其中标「默认」的一个用于未显式指定目标的推送。
+
+- 推送时若要指定公众号：请求体加 `accountId`（后台列表接口 / 页面可见）
+- 草稿箱页按公众号分区展示，可分别刷新与删除
+- 删除默认公众号后，系统会自动把最早添加的一个补为默认
+- 登录后台需要「管理员账号 + 密码」（账号默认 `admin`，可用环境变量 `ADMIN_USER` 或后台「设置」修改）
 
 ## 说明
 
 - 个人订阅号**不能自动群发**，推到草稿箱后仍需到公众号后台**手动点「发表」**。
 - `draft/add` 需要**已认证**的公众号（服务号或认证订阅号）；未认证账号调用会返回 `53500`。
+- 后台密码、AppSecret 等机密只存于 Cloudflare Secrets，仓库内不含任何凭据。
 
 ## License
 
