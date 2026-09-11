@@ -201,12 +201,19 @@ adminApi.post('/try', async (c) => {
 
 // ==================== 公众号管理 ====================
 
-/** 公众号凭据是否可用：拿 token + 试读一次草稿列表（顺带暴露 IP 白名单问题） */
-async function probeAccount(appid: string, appsecret: string): Promise<number> {
+/**
+ * 公众号凭据是否可用：拿 token + 试读一次草稿列表（顺带暴露 IP 白名单问题）
+ * 同时尽量读取公众号昵称（未认证号可能无权限 → 返回 null，不视为失败）
+ */
+async function probeAccount(
+  appid: string,
+  appsecret: string,
+): Promise<{ draftTotal: number; nickName: string | null }> {
   const wx = new WeChat(appid, appsecret)
   await wx.getToken(true)
   const drafts = await wx.batchGetDrafts(0, 1)
-  return drafts.total_count ?? 0
+  const nickName = await wx.getAccountNickName()
+  return { draftTotal: drafts.total_count ?? 0, nickName }
 }
 
 adminApi.get('/accounts', async (c) => {
@@ -245,9 +252,10 @@ adminApi.post('/accounts', async (c) => {
     const exist = (await listAccounts(c.env)).find((a) => a.appid === appid)
     if (exist) return fail(`该 AppID 已存在（${exist.name}）`, 409)
 
-    // 先向微信验证凭据，避免把无效配置存进库
+    // 先向微信验证凭据，避免把无效配置存进库（顺带尝试读取公众号昵称）
+    let info: { draftTotal: number; nickName: string | null }
     try {
-      await probeAccount(appid, appsecret)
+      info = await probeAccount(appid, appsecret)
     } catch (e) {
       return fail(
         `凭据校验未通过：${String((e as Error)?.message ?? e)}（请核对 AppID/AppSecret，并确认已把 Cloudflare 出口 IP 加入微信白名单）`,
@@ -256,13 +264,16 @@ adminApi.post('/accounts', async (c) => {
     }
 
     const acc = await createAccount(c.env, {
-      name: body.name,
+      // 名称优先级：用户填写 > 微信自动读取的昵称 > 兜底
+      name: String(body.name ?? '').trim() || info.nickName || `公众号 ${appid.slice(-6)}`,
       appid,
       appsecret,
       is_default: body.is_default,
     })
     return ok({
       account: { id: acc.id, name: acc.name, appid: acc.appid, is_default: acc.is_default },
+      nickname: info.nickName,
+      draft_total: info.draftTotal,
     })
   } catch (e) {
     return fail(`添加公众号失败：${String((e as Error)?.message ?? e)}`, 500)
@@ -283,19 +294,22 @@ adminApi.put('/accounts/:id', async (c) => {
     const nextAppid = String(body.appid ?? '').trim() || acc.appid
     const nextSecret = String(body.appsecret ?? '').trim() || acc.appsecret
     const changedCred = nextAppid !== acc.appid || nextSecret !== acc.appsecret
+    let nickName: string | null = null
     if (changedCred) {
       if (nextAppid !== acc.appid) {
         const dup = (await listAccounts(c.env)).find((a) => a.appid === nextAppid && a.id !== id)
         if (dup) return fail(`该 AppID 已被「${dup.name}」占用`, 409)
       }
       try {
-        await probeAccount(nextAppid, nextSecret)
+        const info = await probeAccount(nextAppid, nextSecret)
+        nickName = info.nickName
       } catch (e) {
         return fail(`凭据校验未通过：${String((e as Error)?.message ?? e)}`, 400)
       }
     }
     await updateAccount(c.env, id, {
-      name: body.name,
+      // 名称：用户显式填写优先；换凭据后若未填，则用微信读到的昵称补齐
+      name: String(body.name ?? '').trim() || nickName || undefined,
       appid: body.appid,
       appsecret: body.appsecret,
       enabled: typeof body.enabled === 'boolean' ? (body.enabled ? 1 : 0) : (body.enabled as number | undefined),
@@ -328,8 +342,18 @@ adminApi.post('/accounts/:id/test', async (c) => {
   try {
     const acc = await getAccountById(c.env, c.req.param('id'))
     if (!acc) return fail('公众号不存在', 404)
-    const total = await probeAccount(acc.appid, acc.appsecret)
-    return ok({ account: acc.name, appid: acc.appid, draft_total: total, message: '凭据可用，可正常读取草稿箱' })
+    const info = await probeAccount(acc.appid, acc.appsecret)
+    // 顺带把新读到的昵称补写进库（老数据可能还是「公众号 x」这类兜底名）
+    if (info.nickName && info.nickName !== acc.name) {
+      await updateAccount(c.env, acc.id, { name: info.nickName })
+    }
+    return ok({
+      account: info.nickName || acc.name,
+      nickname: info.nickName,
+      appid: acc.appid,
+      draft_total: info.draftTotal,
+      message: '凭据可用，可正常读取草稿箱',
+    })
   } catch (e) {
     return fail(String((e as Error)?.message ?? e), 400)
   }
