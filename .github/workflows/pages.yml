@@ -1,0 +1,38 @@
+name: Deploy to Cloudflare Pages
+
+# 与 deploy.yml（Workers 部署）并行；两个都跑也可以，它们是同一份代码的两种托管形态。
+# 需要的仓库 Secrets：CF_API_TOKEN、CF_ACCOUNT_ID
+# Pages 项目名通过下方 --project-name 指定（首次执行会自动创建项目）
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'scripts/build-pages.mjs'
+      - 'package.json'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm install
+
+      - name: Build Pages bundle (_worker.js)
+        run: node scripts/build-pages.mjs
+
+      - name: Deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          command: pages deploy dist/pages --project-name=wx-draft-worker --branch=main
