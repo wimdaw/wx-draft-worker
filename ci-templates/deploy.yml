@@ -20,7 +20,10 @@ jobs:
       - run: npm run build
 
       # 生成 wrangler.toml（不含任何机密；机密通过 Cloudflare Secrets 注入）
+      # 仓库配置了 D1_DATABASE_ID secret 时自动补上 D1 绑定，否则部署出的 Worker 将没有数据库
       - name: Generate wrangler.toml
+        env:
+          D1_ID: ${{ secrets.D1_DATABASE_ID }}
         run: |
           cat > wrangler.toml << 'EOF'
           name = "wx-draft-worker"
@@ -29,6 +32,11 @@ jobs:
           compatibility_flags = ["nodejs_compat"]
           keep_vars = true
           EOF
+          if [ -n "$D1_ID" ]; then
+            printf '\n[[d1_databases]]\nbinding = "DB"\ndatabase_name = "wx-draft-db"\ndatabase_id = "%s"\n' "$D1_ID" >> wrangler.toml
+          fi
+          echo '----- wrangler.toml -----'
+          cat wrangler.toml
 
       - name: Deploy
         uses: cloudflare/wrangler-action@v3
