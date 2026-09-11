@@ -1,0 +1,11 @@
+node_modules/
+.wrangler/
+.dry-run/
+.node-test/
+.push-test/
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+wrangler.toml
