@@ -2,104 +2,127 @@
  * wx-draft-worker —— 微信公众号草稿推送网关
  * 基于 Cloudflare Workers + Hono，免服务器 / 免备案
  *
- * 接口：
- *   GET    /                     健康检查
- *   GET    /api/health           配置检查
- *   POST   /api/draft            新建草稿
- *   GET    /api/drafts           草稿列表
- *   DELETE /api/drafts/:mediaId  删除草稿
+ * 路由：
+ *   /                       产品首页
+ *   /admin/login            后台登录（GET 页面 / POST 提交）
+ *   /admin                  后台控制台（需登录）
+ *   /admin/app.js           后台前端脚本
+ *   /admin/api/*            后台 API（需登录）
+ *   /api/draft              新建草稿（需令牌）
+ *   /api/drafts             草稿列表（需令牌）
+ *   /api/drafts/:mediaId    删除草稿（需令牌）
+ *   /api/health             健康检查（公开）
  */
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
 import type { Env, DraftRequest } from './types'
-import { ok, fail, makeDigest, truncate } from './utils'
-import { apiKeyAuth } from './auth'
+import { ok, fail } from './utils'
+import { apiTokenAuth, adminAuthMiddleware, handleLogin, handleLogout } from './auth'
 import { WeChat } from './wechat'
-import { renderMarkdown } from './markdown'
+import { pushDraft } from './draft'
+import { adminApi } from './admin'
+import { renderHomePage, renderLoginPage, renderAdminPage } from './pages'
+import { ADMIN_JS } from './admin_app'
+import { seedInitialData } from './storage'
+import { CSS } from './pages.css'
 
 const NAME = 'wx-draft-worker'
-const VERSION = '1.0.0'
+const VERSION = '2.0.0'
 
 const app = new Hono<{ Bindings: Env }>()
 
 // ===== 全局中间件 =====
-app.use('*', cors({ origin: '*' }))
 app.use('*', logger())
-app.use('*', apiKeyAuth)
+app.use('*', cors({ origin: '*' }))
 
-// ===== 健康检查（无需鉴权） =====
-app.get('/', (c) =>
-  ok({
+// 首次请求时建表 + 迁移旧版密钥（失败不阻塞）
+let booted = false
+app.use('*', async (c, next) => {
+  if (!booted && c.env.DB) {
+    try {
+      await seedInitialData(c.env)
+      booted = true
+    } catch (e) {
+      console.error('初始化失败:', e)
+    }
+  }
+  await next()
+})
+
+const origin = (c: { req: { url: string } }): string => {
+  try {
+    return new URL(c.req.url).origin
+  } catch {
+    return ''
+  }
+}
+
+// ==================== 首页 ====================
+app.get('/', (c) => c.html(renderHomePage(origin(c))))
+
+// ==================== 后台登录（必须在鉴权中间件之前注册） ====================
+app.get('/admin/login', (c) => {
+  const failed = c.req.query('error') === '1'
+  return c.html(renderLoginPage({ error: failed, baseUrl: origin(c) }))
+})
+app.post('/admin/login', handleLogin)
+app.get('/admin/logout', handleLogout)
+app.post('/admin/logout', handleLogout)
+
+// ==================== 后台静态资源 ====================
+app.get('/admin/app.js', (c) =>
+  c.body(ADMIN_JS, 200, {
+    'content-type': 'application/javascript; charset=utf-8',
+    'cache-control': 'no-store',
+  }),
+)
+
+// ==================== 后台 API（需登录） ====================
+app.use('/admin/api/*', adminAuthMiddleware)
+app.route('/admin/api', adminApi)
+
+// ==================== 后台页面（需登录） ====================
+app.use('/admin', adminAuthMiddleware)
+app.get('/admin', (c) => c.html(renderAdminPage({ baseUrl: origin(c) })))
+
+// ==================== 健康检查（公开） ====================
+app.get('/api/health', async (c) => {
+  let dbConnected = false
+  try {
+    await c.env.DB.prepare('SELECT 1 AS ok').first()
+    dbConnected = true
+  } catch {
+    /* 数据库不可用 */
+  }
+  return ok({
     service: NAME,
     version: VERSION,
     appid_configured: !!c.env.WECHAT_APPID,
     secret_configured: !!c.env.WECHAT_APPSECRET,
     auth_enabled: !!c.env.DRAFT_API_KEY,
+    db_connected: dbConnected,
     time: new Date().toISOString(),
-  }),
-)
+  })
+})
 
-app.get('/api/health', (c) =>
-  ok({
-    service: NAME,
-    version: VERSION,
-    appid_configured: !!c.env.WECHAT_APPID,
-    secret_configured: !!c.env.WECHAT_APPSECRET,
-    auth_enabled: !!c.env.DRAFT_API_KEY,
-    time: new Date().toISOString(),
-  }),
-)
+// ==================== 业务 API（需令牌） ====================
+app.use('/api/*', apiTokenAuth)
 
-// ===== 新建草稿 =====
+// 新建草稿
 app.post('/api/draft', async (c) => {
   let body: DraftRequest
   try {
-    body = await c.req.json<DraftRequest>()
+    body = (await c.req.json()) as DraftRequest
   } catch {
-    return fail('请求体不是合法 JSON', 400)
+    return fail('请求体必须是合法 JSON', 400)
   }
-
-  try {
-    if (!c.env.WECHAT_APPID || !c.env.WECHAT_APPSECRET) {
-      throw new Error('服务端未配置 WECHAT_APPID / WECHAT_APPSECRET')
-    }
-    let content = body?.content
-    if (!content) throw new Error('缺少 content（正文）')
-    if (body.contentType === 'markdown') content = renderMarkdown(content)
-
-    const wx = new WeChat(c.env.WECHAT_APPID, c.env.WECHAT_APPSECRET)
-
-    // 1) 正文图片转存到微信域名
-    const loc = await wx.localizeImages(content)
-    content = loc.html
-
-    // 2) 解析封面 → thumb_media_id（缺省取正文首图）
-    const thumbMediaId = await wx.resolveCover(body.cover, content)
-    if (!thumbMediaId) {
-      throw new Error('无法生成封面：请传入 cover，或在正文中至少包含一张图片')
-    }
-
-    // 3) 组装并提交草稿
-    const title = truncate(String(body.title || '未命名文章'), 64)
-    const mediaId = await wx.addDraft({
-      title,
-      author: truncate(String(body.author || ''), 8),
-      digest: truncate(String(body.digest || makeDigest(content)), 120),
-      content,
-      thumb_media_id: thumbMediaId,
-      need_open_comment: body.needOpenComment === 0 ? 0 : 1,
-      only_fans_can_comment: body.onlyFansCanComment ? 1 : 0,
-      ...(body.contentSourceUrl ? { content_source_url: body.contentSourceUrl } : {}),
-    })
-
-    return ok({ media_id: mediaId, title, images: loc.localized })
-  } catch (e) {
-    return fail(String((e as Error)?.message ?? e), 500)
-  }
+  if (!body?.content) return fail('缺少 content（正文）', 400)
+  const tokenName = (c.get('tokenName' as never) as string | null) ?? null
+  return pushDraft(c.env, body, tokenName)
 })
 
-// ===== 草稿列表 =====
+// 草稿列表
 app.get('/api/drafts', async (c) => {
   try {
     if (!c.env.WECHAT_APPID || !c.env.WECHAT_APPSECRET) {
@@ -119,7 +142,7 @@ app.get('/api/drafts', async (c) => {
   }
 })
 
-// ===== 删除草稿 =====
+// 删除草稿
 app.delete('/api/drafts/:mediaId', async (c) => {
   try {
     if (!c.env.WECHAT_APPID || !c.env.WECHAT_APPSECRET) {
@@ -134,7 +157,42 @@ app.delete('/api/drafts/:mediaId', async (c) => {
   }
 })
 
+/** 统一风格的错误页（沿用首页设计系统的令牌与字体） */
+function errorPageHtml(code: string, title: string, desc: string): string {
+  return `<!DOCTYPE html><html lang="zh-CN"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${code} · ${title} · 草稿推送网关</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Space+Grotesk:wght@500;600&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+<style>${CSS}</style></head>
+<body class="site-page"><main class="auth-shell" style="grid-template-columns:minmax(0,1fr)">
+  <section class="auth-form-wrap" style="text-align:center;align-items:center;justify-content:center">
+    <p class="eyebrow" style="justify-content:center"><span aria-hidden="true"></span>ERROR ${code}</p>
+    <h1 style="font-size:clamp(2.5rem,8vw,4rem)">${code}</h1>
+    <p style="max-width:48ch;margin-block:var(--space-sm) var(--space-lg);color:var(--color-muted)">${desc}</p>
+    <div class="sp" style="justify-content:center">
+      <a class="btn btn-p" href="/"><i class="fas fa-house" aria-hidden="true"></i>返回首页</a>
+      <a class="btn btn-s" href="/admin"><i class="fas fa-sliders-h" aria-hidden="true"></i>管理控制台</a>
+    </div>
+  </section>
+</main></body></html>`
+}
+
 // ===== 404 =====
-app.notFound((c) => fail('接口不存在', 404))
+app.notFound((c) => {
+  if (c.req.path.startsWith('/api/') || c.req.path.startsWith('/admin/api/')) return fail('接口不存在', 404)
+  return c.html(errorPageHtml('404', '页面不存在', '你访问的地址不存在或已被移动，请检查链接是否正确。'), 404)
+})
+
+// ===== 错误处理 =====
+app.onError((err, c) => {
+  console.error('未捕获的错误:', err)
+  if (c.req.path.startsWith('/api/') || c.req.path.startsWith('/admin/api/')) {
+    return fail('服务器内部错误', 500)
+  }
+  return c.html(errorPageHtml('500', '服务器内部错误', '服务暂时出了点问题，请稍后重试；若持续出现请检查 Worker 日志。'), 500)
+})
 
 export default app
