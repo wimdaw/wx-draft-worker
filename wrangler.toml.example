@@ -1,0 +1,13 @@
+# 复制为 wrangler.toml 后按需修改（wrangler.toml 已在 .gitignore 中，不会入库）
+name = "wx-draft-worker"
+main = "src/index.ts"
+compatibility_date = "2025-07-01"
+compatibility_flags = ["nodejs_compat"]
+keep_vars = true
+
+# 非机密变量可写在这里；机密变量请用 `wrangler secret put` 或 CF 控制台 Variables and Secrets 添加：
+#   WECHAT_APPID     — 公众号 AppID（普通变量）
+#   WECHAT_APPSECRET — 公众号 AppSecret（机密，务必 Encrypt）
+#   DRAFT_API_KEY    — 调用鉴权密钥（机密，可留空表示不鉴权）
+[vars]
+# WECHAT_APPID = "wx0000000000000000"
