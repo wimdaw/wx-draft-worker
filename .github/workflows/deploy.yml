@@ -1,0 +1,38 @@
+name: Deploy to Cloudflare Workers
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm install
+      - run: npm run build
+
+      # 生成 wrangler.toml（不含任何机密；机密通过 Cloudflare Secrets 注入）
+      - name: Generate wrangler.toml
+        run: |
+          cat > wrangler.toml << 'EOF'
+          name = "wx-draft-worker"
+          main = "src/index.ts"
+          compatibility_date = "2025-07-01"
+          compatibility_flags = ["nodejs_compat"]
+          keep_vars = true
+          EOF
+
+      - name: Deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          command: deploy
