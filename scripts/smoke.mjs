@@ -106,7 +106,7 @@ const mockDB = {
           if (key !== 'db-token') return null
           return { id: 't1', name: '后台令牌', key: 'db-token', enabled: 1, use_count: 0, created_at: '', last_used_at: null }
         }
-        if (/FROM tokens/.test(sql)) return { total: 1, enabled: 1 }
+        if (/FROM tokens/.test(sql)) return { n: 1, total: 1, enabled: 1 }
         return {}
       },
       async all() { return { results: [] } },
