@@ -288,8 +288,10 @@ node scripts/smoke.mjs ../dist/pages/_worker.js
 
 之后 push 到 `main` 即自动构建并部署。Pages 项目名在 `pages.yml` 的 `--project-name=` 处修改（首次执行会自动创建项目）。
 
-> 💡 CI 运行需要两个仓库 Secret：`CF_API_TOKEN`（权限含 *Workers Scripts: Edit* 与 *Cloudflare Pages: Edit*）和 `CF_ACCOUNT_ID`，
-> 在仓库 Settings → Secrets and variables → Actions 里配置后即可全自动部署。
+> 💡 CI 运行需要三个仓库 Secret（Settings → Secrets and variables → Actions）：
+> `CF_API_TOKEN`（权限含 *Workers Scripts: Edit* 与 *Cloudflare Pages: Edit*）、`CF_ACCOUNT_ID`、
+> `D1_DATABASE_ID`（`npx wrangler d1 create` 输出的 uuid；**不配则部署出的 Worker 没有数据库绑定**）。
+> 配置后 push 到 `main` 即自动构建并部署。
 > ⚠️ 若你改用脚本 / API 推送代码，写入 `.github/workflows/*` 需要 Token 具备 **workflow** 权限（否则恒返回 404，
 > 网页端上传则不受限）；仓库根目录 **`ci-templates/`** 保留了两份工作流副本，方便网页端直接复制使用。
 
