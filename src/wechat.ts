@@ -16,9 +16,8 @@ import { isWxImageUrl, sourceToBlob, extractImgSrcs, firstImgSrc } from './image
 
 const WX_BASE = 'https://api.weixin.qq.com'
 
-/** 模块级 token 缓存：同一 isolate 生命周期内复用，避免反复获取触发频率限制 */
-let cachedToken: string | null = null
-let cachedExp = 0
+/** 模块级 token 缓存：按 appid 分开存（多公众号各自独立），避免反复获取触发频率限制 */
+const tokenCache = new Map<string, { token: string; exp: number }>()
 
 export class WeChat {
   constructor(
@@ -29,7 +28,8 @@ export class WeChat {
   /** 获取 access_token（优先使用未过期的缓存） */
   async getToken(force = false): Promise<string> {
     const now = Date.now()
-    if (!force && cachedToken && now < cachedExp) return cachedToken
+    const hit = tokenCache.get(this.appid)
+    if (!force && hit && now < hit.exp) return hit.token
 
     const resp = await fetch(`${WX_BASE}/cgi-bin/stable_token`, {
       method: 'POST',
@@ -45,10 +45,12 @@ export class WeChat {
     throwIfWxError('获取 access_token', data)
     if (!data.access_token) throw new Error('获取 access_token 失败：响应为空')
 
-    cachedToken = data.access_token
     // 提前 200 秒过期，规避边界失效
-    cachedExp = now + ((data.expires_in ?? 7200) - 200) * 1000
-    return cachedToken
+    tokenCache.set(this.appid, {
+      token: data.access_token,
+      exp: now + ((data.expires_in ?? 7200) - 200) * 1000,
+    })
+    return data.access_token
   }
 
   /** 上传正文图片 → 返回可用于正文的微信域名 URL（临时素材） */
