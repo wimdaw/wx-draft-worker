@@ -9,3 +9,10 @@ node_modules/
 .env.*
 !.env.example
 wrangler.toml
+
+# 本地验证/截图临时产物
+_shots/
+_admin_preview.html
+_app_check.js
+_token.txt
+_mid.txt
