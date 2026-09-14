@@ -18,17 +18,18 @@ import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
 import type { Env, DraftRequest } from './types'
 import { ok, fail } from './utils'
-import { apiTokenAuth, adminAuthMiddleware, handleLogin, handleLogout } from './auth'
+import { apiTokenAuth, adminAuthMiddleware, handleLogin, handleLogout, currentUser } from './auth'
 import { WeChat } from './wechat'
 import { pushDraft } from './draft'
 import { adminApi } from './admin'
 import { renderHomePage, renderLoginPage, renderAdminPage } from './pages'
 import { ADMIN_JS } from './admin_app'
-import { seedInitialData } from './storage'
+import { seedInitialData, resolveAccount } from './storage'
+import { sourceToBlob } from './images'
 import { CSS } from './pages.css'
 
 const NAME = 'wx-draft-worker'
-const VERSION = '2.0.0'
+const VERSION = '2.1.0'  // 2.1.0: img src HTML 实体解码，修复外链图转存 400（图丢失）
 
 const app = new Hono<{ Bindings: Env }>()
 
@@ -58,6 +59,13 @@ const origin = (c: { req: { url: string } }): string => {
   }
 }
 
+/** 是否至少有一篇正文：单图文看 content，多图文看 articles 中是否有非空 content */
+function hasAnyContent(body?: DraftRequest | null): boolean {
+  if (!body) return false
+  if (String(body.content ?? '').trim()) return true
+  return Array.isArray(body.articles) && body.articles.some((a) => String(a?.content ?? '').trim())
+}
+
 // ==================== 首页 ====================
 app.get('/', (c) => c.html(renderHomePage(origin(c))))
 
@@ -84,7 +92,15 @@ app.route('/admin/api', adminApi)
 
 // ==================== 后台页面（需登录） ====================
 app.use('/admin', adminAuthMiddleware)
-app.get('/admin', (c) => c.html(renderAdminPage({ baseUrl: origin(c) })))
+app.get('/admin', (c) => {
+  const user = currentUser(c)
+  return c.html(
+    renderAdminPage({
+      baseUrl: origin(c),
+      user: user ? { username: user.username, role: user.role } : undefined,
+    }),
+  )
+})
 
 // ==================== 健康检查（公开） ====================
 app.get('/api/health', async (c) => {
@@ -117,22 +133,24 @@ app.post('/api/draft', async (c) => {
   } catch {
     return fail('请求体必须是合法 JSON', 400)
   }
-  if (!body?.content) return fail('缺少 content（正文）', 400)
+  if (!hasAnyContent(body)) return fail('缺少 content（正文）', 400)
   const tokenName = (c.get('tokenName' as never) as string | null) ?? null
-  return pushDraft(c.env, body, tokenName)
+  const ownerId = (c.get('apiOwnerId' as never) as string | null) ?? null
+  return pushDraft(c.env, body, tokenName, body?.accountId ?? null, ownerId)
 })
 
 // 草稿列表
 app.get('/api/drafts', async (c) => {
   try {
-    if (!c.env.WECHAT_APPID || !c.env.WECHAT_APPSECRET) {
-      throw new Error('服务端未配置 WECHAT_APPID / WECHAT_APPSECRET')
-    }
+    const ownerId = (c.get('apiOwnerId' as never) as string | null) ?? null
+    const account = await resolveAccount(c.env, null, ownerId)
+    if (!account) throw new Error('尚未配置公众号：请在后台添加 AppID / AppSecret')
     const offset = Number(c.req.query('offset') ?? 0) || 0
     const count = Math.min(Number(c.req.query('count') ?? 20) || 20, 20)
-    const wx = new WeChat(c.env.WECHAT_APPID, c.env.WECHAT_APPSECRET)
+    const wx = new WeChat(account.appid, account.appsecret)
     const data = await wx.batchGetDrafts(offset, count)
     return ok({
+      account: account.name,
       total_count: data.total_count ?? 0,
       item_count: data.item_count ?? 0,
       item: data.item ?? [],
@@ -145,13 +163,37 @@ app.get('/api/drafts', async (c) => {
 // 删除草稿
 app.delete('/api/drafts/:mediaId', async (c) => {
   try {
-    if (!c.env.WECHAT_APPID || !c.env.WECHAT_APPSECRET) {
-      throw new Error('服务端未配置 WECHAT_APPID / WECHAT_APPSECRET')
-    }
+    const ownerId = (c.get('apiOwnerId' as never) as string | null) ?? null
+    const account = await resolveAccount(c.env, null, ownerId)
+    if (!account) throw new Error('尚未配置公众号：请在后台添加 AppID / AppSecret')
     const mediaId = c.req.param('mediaId')
-    const wx = new WeChat(c.env.WECHAT_APPID, c.env.WECHAT_APPSECRET)
+    const wx = new WeChat(account.appid, account.appsecret)
     await wx.deleteDraft(mediaId)
-    return ok({ media_id: mediaId })
+    return ok({ media_id: mediaId, account: account.name })
+  } catch (e) {
+    return fail(String((e as Error)?.message ?? e), 500)
+  }
+})
+
+// 上传图片为永久素材（返回 media_id 与微信域名 URL，可在正文 / 封面中复用）
+app.post('/api/material', async (c) => {
+  let body: { url?: string; dataUri?: string; filename?: string }
+  try {
+    body = (await c.req.json()) as { url?: string; dataUri?: string; filename?: string }
+  } catch {
+    return fail('请求体必须是合法 JSON', 400)
+  }
+  const source = String(body.dataUri || body.url || '').trim()
+  if (!source) return fail('缺少 url 或 dataUri', 400)
+  try {
+    const ownerId = (c.get('apiOwnerId' as never) as string | null) ?? null
+    const account = await resolveAccount(c.env, null, ownerId)
+    if (!account) throw new Error('尚未配置公众号：请在后台添加 AppID / AppSecret')
+    const blob = await sourceToBlob(source)
+    if (!blob) throw new Error('无法读取图片：请提供可访问的图片 URL 或 data URI')
+    const wx = new WeChat(account.appid, account.appsecret)
+    const up = await wx.uploadPermanentImage(blob, String(body.filename || 'image.png'))
+    return ok({ media_id: up.media_id, url: up.url, account: account.name })
   } catch (e) {
     return fail(String((e as Error)?.message ?? e), 500)
   }

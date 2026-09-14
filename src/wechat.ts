@@ -88,8 +88,8 @@ export class WeChat {
     return data.url
   }
 
-  /** 上传封面为永久素材 → 返回 thumb_media_id */
-  async uploadMaterialImage(blob: Blob, filename = 'cover.png'): Promise<string> {
+  /** 上传图片为永久素材 → 返回 media_id 与微信域名 URL（可用于正文复用） */
+  async uploadPermanentImage(blob: Blob, filename = 'image.png'): Promise<{ media_id: string; url: string | null }> {
     const token = await this.getToken()
     const fd = new FormData()
     fd.append('media', blob, filename)
@@ -100,9 +100,14 @@ export class WeChat {
       { method: 'POST', body: fd },
     )
     const data = (await resp.json()) as WxMaterialResponse
-    throwIfWxError('上传封面素材', data)
-    if (!data.media_id) throw new Error('上传封面素材失败：未返回 media_id')
-    return data.media_id
+    throwIfWxError('上传永久素材', data)
+    if (!data.media_id) throw new Error('上传永久素材失败：未返回 media_id')
+    return { media_id: data.media_id, url: data.url ?? null }
+  }
+
+  /** 上传封面为永久素材 → 返回 thumb_media_id */
+  async uploadMaterialImage(blob: Blob, filename = 'cover.png'): Promise<string> {
+    return (await this.uploadPermanentImage(blob, filename)).media_id
   }
 
   /**
@@ -123,9 +128,11 @@ export class WeChat {
         const blob = await sourceToBlob(src)
         if (!blob) continue
         const url = await this.uploadContentImage(blob)
-        out = out.split(src).join(url)
+        // HTML 里 src 可能以 &amp; 实体形式出现：两种形式都要替换成微信域名图
+        const encodedSrc = src.replace(/&/g, '&amp;')
+        out = out.split(src).join(url).split(encodedSrc).join(url)
         localized++
-      } catch {
+      } catch (e) {
         // 单张失败不影响整体，记录下来供调用方排查
         failed.push(src)
       }
@@ -150,15 +157,15 @@ export class WeChat {
     return null
   }
 
-  /** 新建草稿 → 返回草稿 media_id */
-  async addDraft(article: WxArticle): Promise<string> {
+  /** 新建草稿（支持多图文，1~8 篇）→ 返回草稿 media_id */
+  async addDraft(articles: WxArticle[]): Promise<string> {
     const token = await this.getToken()
     const resp = await fetch(
       `${WX_BASE}/cgi-bin/draft/add?access_token=${encodeURIComponent(token)}`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ articles: [article] }),
+        body: JSON.stringify({ articles }),
       },
     )
     const data = (await resp.json()) as WxDraftAddResponse
@@ -167,7 +174,10 @@ export class WeChat {
     return data.media_id
   }
 
-  /** 获取草稿列表 */
+  /**
+   * 获取草稿列表。
+   * 注意：必须 no_content=0，否则微信不返回 content.news_item，标题会缺失。
+   */
   async batchGetDrafts(offset = 0, count = 20): Promise<WxDraftBatchResponse> {
     const token = await this.getToken()
     const resp = await fetch(
@@ -175,7 +185,7 @@ export class WeChat {
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ offset, count, no_content: 1 }),
+        body: JSON.stringify({ offset, count, no_content: 0 }),
       },
     )
     const data = (await resp.json()) as WxDraftBatchResponse

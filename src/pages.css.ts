@@ -148,6 +148,8 @@ html:focus-within { scroll-behavior: smooth; }
 .btn { min-height: var(--control-h-sm); padding-inline: var(--space-sm); display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2xs); font-size: var(--text-sm); font-weight: 600; line-height: 1; }
 .btn-p { border-color: var(--color-accent); background: var(--color-accent); color: var(--color-accent-ink); }
 .btn-s { border-color: var(--color-rule-2); background: var(--color-paper); color: var(--color-ink-2); }
+/* 纯图标按钮：与 .btn 同尺寸的正方形，配合 title 使用 */
+.btn-icon { padding-inline: 0; inline-size: var(--control-h-sm); flex: 0 0 var(--control-h-sm); }
 .btn-gh { border-color: transparent; background: transparent; color: var(--color-muted); }
 .btn-g { border-color: var(--color-success-soft); background: var(--color-success-soft); color: var(--color-success-ink); }
 .btn-d { border-color: var(--color-danger-soft); background: var(--color-danger-soft); color: var(--color-danger-ink); }
@@ -166,6 +168,8 @@ html:focus-within { scroll-behavior: smooth; }
 input, textarea, select {
   width: 100%; height: var(--control-h); padding-inline: var(--space-xs); border: .0625rem solid var(--color-rule-2); border-radius: var(--radius-control); outline: .125rem solid transparent; outline-offset: .0625rem; background: var(--color-paper); color: var(--color-ink); transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
+/* 行内小尺寸控件：与 .btn（--control-h-sm）等高，用于和图标按钮并排 */
+.input-sm { height: var(--control-h-sm); }
 /* 复选框 / 单选框不应继承输入框的整行尺寸与边框（否则会被撑成一个大方框） */
 input[type='checkbox'], input[type='radio'] {
   width: 1rem; height: 1rem; min-height: 0; padding: 0; border: 0; border-radius: 0; background: none; flex: 0 0 auto; accent-color: var(--color-accent); cursor: pointer;
@@ -553,6 +557,8 @@ label, legend { color: var(--color-ink-2); font-size: var(--text-xs); font-weigh
 .tb tbody tr:last-child td { border-block-end: 0; }
 .tb tbody tr:hover { background: var(--color-paper-2); }
 .tb code { font-size: var(--text-xs); white-space: nowrap; }
+/* 表格中的长文本列：超出即省略号，悬停用 title 看全文，避免把表格撑开 */
+.cell-clip { display: block; max-width: clamp(8rem, 30vw, 24rem); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* HTTP 方法徽标 */
 .method { display: inline-flex; align-items: center; justify-content: center; min-height: 1.5rem; padding-inline: var(--space-2xs); border-radius: var(--radius-control); font-family: var(--font-mono); font-size: .6875rem; font-weight: 600; letter-spacing: .04em; }
@@ -583,6 +589,9 @@ label, legend { color: var(--color-ink-2); font-size: var(--text-xs); font-weigh
 .panel-body { padding: var(--space-md); }
 .panel-body > * + * { margin-block-start: var(--space-sm); }
 .panel-flush { overflow: hidden; }
+/* 表格底部的操作 / 分页条 */
+.table-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2xs) var(--space-sm); padding: var(--space-2xs) var(--space-sm); border-block-start: .0625rem solid var(--color-rule); }
+@media (max-width: 48rem) { .table-foot { justify-content: center; } }
 
 /* 统计网格 */
 .stat-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: .0625rem solid var(--color-rule); border-radius: var(--radius-panel); background: var(--color-paper); overflow: hidden; }
@@ -609,6 +618,10 @@ label, legend { color: var(--color-ink-2); font-size: var(--text-xs); font-weigh
 /* 表单 */
 .field { min-width: 0; display: flex; flex-direction: column; gap: var(--space-3xs); }
 .field > label { color: var(--color-ink-2); font-size: var(--text-xs); font-weight: 600; }
+/* 表单下方的补充说明：小字 + 图标，限制行宽避免长句铺满整行 */
+.form-hint { display: flex; align-items: flex-start; gap: var(--space-2xs); max-width: 68ch; color: var(--color-muted); font-size: var(--text-xs); line-height: 1.7; }
+.form-hint > i { flex: 0 0 auto; margin-block-start: .2em; }
+.form-hint > span { min-width: 0; }
 .row { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-sm); }
 @media (min-width: 48rem) { .row { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .muted { color: var(--color-muted); }
@@ -653,12 +666,16 @@ label, legend { color: var(--color-ink-2); font-size: var(--text-xs); font-weigh
 /* 后台视图页头（ai-gateway 原生风格） */
 .admin-heading { margin-block-end: var(--space-lg); display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: var(--space-sm); }
 .admin-heading > div > h1, .admin-heading > h1 { font-size: var(--text-xl); font-weight: 600; }
+/* 视图内多个分节（如草稿箱按公众号分组）之间留出间距：非首个标题才加，避免提示 / 表格与下一个标题黏连 */
+#view > * + .admin-heading { margin-block-start: var(--space-xl); }
 .dots { display: flex; gap: .25rem; }
 .dots i { width: .375rem; height: .375rem; border-radius: 50%; background: var(--color-rule-2); }
 
-/* 面板内直接放置的内容需要内边距 */
-.panel > .row, .panel > .notice, .panel > .bars, .panel > .field { padding: var(--space-md); }
-.panel > .mono-out { margin: var(--space-md); }
+/* 面板内容统一起始边：非 flush 面板的所有直接子元素都与面板标题左对齐。
+   用外边距而非内边距，避免按钮 / 代码块 / 表格被二次缩进；.panel 有边框，子元素外边距不会溢出。 */
+.panel:not(.panel-flush) > *:not(.panel-head):not(.stat-grid) { margin: var(--space-md); }
+/* flush 面板里的空状态框也要内缩，否则虚线框会与面板边框重叠 */
+.panel-flush > .empty-state { margin: var(--space-md); }
 .panel > .stat-grid { border: 0; border-radius: 0; }
 
 /* 令牌展示 / 图标细节 */

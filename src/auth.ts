@@ -1,22 +1,28 @@
 /**
  * wx-draft-worker · 鉴权
- * - 后台：会话 Cookie（登录后 7 天有效）
+ * - 后台：会话 Cookie（登录后 7 天有效），会话绑定用户，支持 admin / member 角色
  * - 业务 API：X-API-Key / ?key= / Authorization: Bearer
  *   优先匹配 DB 令牌（后台可管理），兼容旧的 DRAFT_API_KEY 环境变量
  */
 import type { Context, MiddlewareHandler } from 'hono'
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie'
-import type { Env } from './types'
+import type { Env, SessionUser } from './types'
 import { fail, ok } from './utils'
 import { renderLoginPage } from './pages'
 import {
   findTokenByKey,
   touchToken,
   createSession,
-  getSession,
+  getSessionUser,
   deleteSession,
   purgeExpiredSessions,
+  getUserByUsername,
+  createUser,
+  touchUserLogin,
+  getSettings,
+  addAuditLog,
 } from './storage'
+import { verifyPassword } from './password'
 
 export const SESSION_COOKIE = 'wxd_session'
 
@@ -35,61 +41,83 @@ async function safeEqual(a: string, b: string): Promise<boolean> {
   return diff === 0
 }
 
-/** 管理员密码：后台设置 > 环境变量 > 默认口令 */
-export async function getAdminPassword(env: Env): Promise<string> {
-  try {
-    const row = await env.DB.prepare(`SELECT value FROM settings WHERE key = 'admin_password'`).first<{
-      value: string
-    }>()
-    if (row?.value) return row.value
-  } catch {
-    /* 表未就绪时回落到环境变量 */
-  }
-  return env.ADMIN_PASSWORD || 'admin'
+// ==================== 上下文身份 ====================
+
+/** 当前登录用户（由 adminAuthMiddleware 注入） */
+export function currentUser(c: Context): SessionUser | null {
+  return ((c.get('user' as never) as SessionUser | null | undefined) ?? null) as SessionUser | null
 }
 
-export async function verifyAdminPassword(env: Env, password: string): Promise<boolean> {
-  return safeEqual(password, await getAdminPassword(env))
+/**
+ * 资源归属范围：管理员返回 null（可看/管全部），会员返回自身 id。
+ * 业务 API 侧由令牌归属推导，见 apiTokenAuth。
+ */
+export function ownerScope(c: Context): string | null {
+  const u = currentUser(c)
+  return u && u.role !== 'admin' ? u.id : null
 }
 
-/** 管理员账号：数据库设置 > 环境变量 > 默认 admin */
+// ==================== 旧口令兼容 ====================
+
+/** 旧版管理员账号：settings > 环境变量 > 默认 admin */
 export async function getAdminUser(env: Env): Promise<string> {
   try {
-    const row = await env.DB.prepare(`SELECT value FROM settings WHERE key = 'admin_user'`).first<{
-      value: string
-    }>()
-    if (row?.value) return row.value
+    const s = await getSettings(env)
+    if (s.admin_user) return s.admin_user
   } catch {
-    /* 表未就绪时回落到环境变量 */
+    /* 表未就绪 */
   }
   return env.ADMIN_USER || 'admin'
 }
 
-/** 校验后台登录：账号 + 密码都需匹配 */
-export async function verifyAdminCredentials(env: Env, user: string, password: string): Promise<boolean> {
-  const [okUser, okPw] = await Promise.all([
-    safeEqual(String(user).trim(), await getAdminUser(env)),
-    verifyAdminPassword(env, password),
-  ])
+/** 旧版管理员口令是否仍为默认值（页面提示用） */
+export async function usingDefaultPassword(env: Env): Promise<boolean> {
+  if (env.ADMIN_PASSWORD) return false
+  try {
+    const s = await getSettings(env)
+    return !s.admin_password
+  } catch {
+    return true
+  }
+}
+
+/** 校验是否匹配旧版（环境变量 / settings）管理员口令 */
+async function legacyAdminMatch(env: Env, username: string, password: string): Promise<boolean> {
+  let user = env.ADMIN_USER || 'admin'
+  let pw = env.ADMIN_PASSWORD || 'admin'
+  try {
+    const s = await getSettings(env)
+    if (s.admin_user) user = s.admin_user
+    if (s.admin_password) pw = s.admin_password
+  } catch {
+    /* 表未就绪时用环境变量 */
+  }
+  const [okUser, okPw] = await Promise.all([safeEqual(username, user), safeEqual(password, pw)])
   return okUser && okPw
 }
 
-/** 是否仍在使用默认口令（页面提示用） */
-export async function usingDefaultPassword(env: Env): Promise<boolean> {
-  return (await getAdminPassword(env)) === 'admin'
-}
-
-// ==================== 后台会话 ====================
+// ==================== 后台会话中间件 ====================
 
 export const adminAuthMiddleware: MiddlewareHandler<{ Bindings: Env }> = async (c, next) => {
   const sid = getCookie(c, SESSION_COOKIE) ?? ''
-  const valid = sid ? await getSession(c.env, sid) : false
-  if (!valid) {
+  const user = sid ? await getSessionUser(c.env, sid) : null
+  if (!user) {
     if (c.req.path.startsWith('/admin/api/')) return fail('未登录或会话已过期，请重新登录', 401)
     return c.redirect('/admin/login')
   }
+  c.set('user' as never, user as never)
   return next()
 }
+
+/** 仅管理员可访问（须挂在 adminAuthMiddleware 之后） */
+export const requireAdmin: MiddlewareHandler<{ Bindings: Env }> = async (c, next) => {
+  const user = currentUser(c)
+  if (!user) return fail('未登录', 401)
+  if (user.role !== 'admin') return fail('需要管理员权限', 403)
+  return next()
+}
+
+// ==================== 登录 / 登出 ====================
 
 export async function handleLogin(c: Context<{ Bindings: Env }>): Promise<Response> {
   const ct = c.req.header('content-type') ?? ''
@@ -108,12 +136,33 @@ export async function handleLogin(c: Context<{ Bindings: Env }>): Promise<Respon
   }
 
   // 账号留空时按默认账号处理，兼容旧客户端只用密码登录
-  if (!(await verifyAdminCredentials(c.env, username || 'admin', password))) {
-    return asJson ? fail('账号或密码错误', 401) : c.html(loginErrorPage(), 401)
+  const uname = (username || 'admin').trim()
+  const denied = () => (asJson ? fail('账号或密码错误', 401) : c.html(loginErrorPage(), 401))
+
+  let user = await getUserByUsername(c.env, uname)
+  let valid = !!user && !!user.enabled && (await verifyPassword(password, user.password_hash, user.salt))
+
+  // 兼容通道：首次部署尚未种下管理员，或口令仍配置在环境变量 / settings 里
+  if (!valid && (await legacyAdminMatch(c.env, uname, password))) {
+    if (!user) {
+      user = await createUser(c.env, { username: uname, password, role: 'admin' })
+    }
+    valid = !!user && !!user.enabled
   }
 
+  if (!valid || !user) return denied()
+
+  await touchUserLogin(c.env, user.id)
+  await addAuditLog(c.env, {
+    userId: user.id,
+    username: user.username,
+    action: 'login',
+    targetType: 'user',
+    targetId: user.id,
+    ip: c.req.header('cf-connecting-ip') ?? null,
+  })
   await purgeExpiredSessions(c.env)
-  const session = await createSession(c.env)
+  const session = await createSession(c.env, { id: user.id, username: user.username, role: user.role })
   const secure = new URL(c.req.url).protocol === 'https:'
   setCookie(c, SESSION_COOKIE, session.id, {
     path: '/',
@@ -122,7 +171,7 @@ export async function handleLogin(c: Context<{ Bindings: Env }>): Promise<Respon
     secure,
     maxAge: 7 * 86400,
   })
-  return asJson ? ok({ redirect: '/admin' }) : c.redirect('/admin')
+  return asJson ? ok({ redirect: '/admin', role: user.role }) : c.redirect('/admin')
 }
 
 export async function handleLogout(c: Context<{ Bindings: Env }>): Promise<Response> {
@@ -140,7 +189,7 @@ function loginErrorPage(): string {
 // ==================== 业务 API 令牌 ====================
 
 type ApiAuthResult =
-  | { ok: true; tokenName: string | null }
+  | { ok: true; tokenName: string | null; ownerId: string | null }
   | { ok: false; response: Response }
 
 /** D1 里是否存在启用中的业务令牌（用于判断是否处于「开放模式」） */
@@ -158,12 +207,12 @@ async function hasEnabledToken(env: Env): Promise<boolean> {
 
 async function verifyApiKey(env: Env, provided: string): Promise<ApiAuthResult> {
   if (env.DRAFT_API_KEY && (await safeEqual(provided, env.DRAFT_API_KEY))) {
-    return { ok: true, tokenName: '环境变量密钥' }
+    return { ok: true, tokenName: '环境变量密钥', ownerId: null }
   }
   const token = await findTokenByKey(env, provided)
   if (token) {
     await touchToken(env, token.id)
-    return { ok: true, tokenName: token.name }
+    return { ok: true, tokenName: token.name, ownerId: token.user_id ?? null }
   }
   return { ok: false, response: fail('令牌无效或已被禁用', 401) }
 }
@@ -195,5 +244,6 @@ export const apiTokenAuth: MiddlewareHandler<{ Bindings: Env }> = async (c, next
   const result = await verifyApiKey(c.env, provided)
   if (!result.ok) return result.response
   c.set('tokenName' as never, result.tokenName as never)
+  c.set('apiOwnerId' as never, result.ownerId as never)
   return next()
 }

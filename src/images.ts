@@ -38,12 +38,21 @@ export function isWxImageUrl(url: string): boolean {
   )
 }
 
-/** 提取 HTML 中所有 <img src> */
+/** 解码 HTML 属性中的常见实体（&amp; 按字面拉取会导致图床 400） */
+export function decodeAttrEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x27;/g, "'")
+}
+
+/** 提取 HTML 中所有 <img src>（返回值已解码实体，可直接用于下载） */
 export function extractImgSrcs(html: string): string[] {
   const re = /<img\s+[^>]*?src=["']([^"']+)["'][^>]*>/gi
   const out: string[] = []
   let m: RegExpExecArray | null
-  while ((m = re.exec(html)) !== null) out.push(m[1])
+  while ((m = re.exec(html)) !== null) out.push(decodeAttrEntities(m[1]))
   return out
 }
 

@@ -18,6 +18,30 @@ export interface Env {
   DRAFT_API_KEY?: string
 }
 
+/** 用户角色：admin 管理全部；member 只能管理自己的令牌 / 公众号 / 记录 */
+export type UserRole = 'admin' | 'member'
+
+/** 后台用户 */
+export interface User {
+  id: string
+  username: string
+  password_hash: string
+  salt: string
+  role: UserRole
+  enabled: number
+  created_at: string
+  last_login_at: string | null
+  /** 由哪个用户创建（首个管理员为 null） */
+  created_by: string | null
+}
+
+/** 会话中携带的用户身份（不含密码字段） */
+export interface SessionUser {
+  id: string
+  username: string
+  role: UserRole
+}
+
 /** API 令牌 */
 export interface Token {
   id: string
@@ -27,6 +51,8 @@ export interface Token {
   created_at: string
   last_used_at: string | null
   use_count: number
+  /** 归属用户；null 表示旧数据 / 环境变量密钥（视为管理员） */
+  user_id?: string | null
 }
 
 /** 推送记录 */
@@ -43,6 +69,10 @@ export interface DraftRecord {
   token_name: string | null
   /** 推送所用的公众号名（多公众号分类） */
   account_name?: string | null
+  /** 归属用户 */
+  user_id?: string | null
+  /** 本次草稿包含的文章篇数（多图文 > 1） */
+  article_count?: number
   created_at: string
 }
 
@@ -55,6 +85,8 @@ export interface Account {
   enabled: number
   is_default: number
   created_at: string
+  /** 归属用户；null 表示旧数据（归管理员） */
+  user_id?: string | null
 }
 
 /** 后台概览统计 */
@@ -80,7 +112,7 @@ export interface DraftRequest {
   author?: string
   /** 摘要；缺省由正文自动生成（≤ 120 字） */
   digest?: string
-  /** 正文（必填） */
+  /** 正文（必填，单图文时） */
   content?: string
   /** 封面：远程 URL / data URI；缺省取正文第一张图 */
   cover?: string
@@ -94,6 +126,38 @@ export interface DraftRequest {
   onlyFansCanComment?: 0 | 1
   /** 目标公众号账号 id（缺省用后台设置的默认公众号） */
   accountId?: string
+  /**
+   * 多图文：提供后按篇推送（1~8 篇）。
+   * 每篇未填的字段回落到顶层同名字段（author / needOpenComment / onlyFansCanComment 等）。
+   */
+  articles?: DraftArticleInput[]
+}
+
+/** 多图文草稿中的单篇 */
+export interface DraftArticleInput {
+  title?: string
+  author?: string
+  digest?: string
+  content?: string
+  cover?: string
+  contentType?: 'html' | 'markdown'
+  contentSourceUrl?: string
+  needOpenComment?: 0 | 1
+  onlyFansCanComment?: 0 | 1
+}
+
+/** 操作审计日志 */
+export interface AuditLog {
+  id: string
+  user_id: string | null
+  username: string | null
+  /** 动作标识，如 token.create / account.delete / user.password */
+  action: string
+  target_type: string | null
+  target_id: string | null
+  detail: string | null
+  ip: string | null
+  created_at: string
 }
 
 /** 微信 API 通用响应字段 */
@@ -131,6 +195,7 @@ export interface WxDraftItem {
   content?: {
     news_item?: Array<{
       title?: string
+      author?: string
       digest?: string
       url?: string
       thumb_url?: string

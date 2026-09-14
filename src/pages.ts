@@ -260,11 +260,13 @@ console.log(await res.json())`
           <tr><td><span class="method post">POST</span></td><td><code>/api/draft</code></td>
             <td>新建草稿。字段：<code>title</code> / <code>author</code>（≤8 字）/ <code>digest</code> / <code>content</code>（必填）/
             <code>cover</code> / <code>contentType</code>（html|markdown）/ <code>contentSourceUrl</code> /
-            <code>needOpenComment</code> / <code>onlyFansCanComment</code></td></tr>
+            <code>needOpenComment</code> / <code>onlyFansCanComment</code>；传 <code>articles[]</code> 可一次发多图文（≤8 篇）</td></tr>
           <tr><td><span class="method get">GET</span></td><td><code>/api/drafts</code></td>
             <td>微信草稿箱列表，参数 <code>offset</code> / <code>count</code>（≤20）</td></tr>
           <tr><td><span class="method del">DELETE</span></td><td><code>/api/drafts/:mediaId</code></td>
             <td>删除指定草稿</td></tr>
+          <tr><td><span class="method post">POST</span></td><td><code>/api/material</code></td>
+            <td>上传图片为永久素材（<code>url</code> 或 <code>dataUri</code>）→ 返回 <code>media_id</code> 与微信域名 <code>url</code>，可复用</td></tr>
           <tr><td><span class="method get">GET</span></td><td><code>/api/health</code></td>
             <td>配置自检：公众号凭据、鉴权状态、数据库连通性</td></tr>
         </tbody>
@@ -309,29 +311,29 @@ export function renderLoginPage(opts: { error?: boolean; baseUrl: string } = { b
     <form class="auth-form" method="post" action="/admin/login" novalidate>
       <div class="auth-form__heading">
         <span class="auth-form__icon" aria-hidden="true"><i class="fas fa-lock"></i></span>
-        <div><h2>管理员登录</h2><p>输入管理员账号与密码继续。</p></div>
+        <div><h2>账号登录</h2><p>输入用户名与密码继续。</p></div>
       </div>
       ${opts.error ? '<div class="al al-e"><i class="fas fa-circle-exclamation" aria-hidden="true"></i><span>账号或密码不正确，请重新输入。</span></div>' : ''}
       <div class="fg">
-        <label for="user">管理员账号</label>
+        <label for="user">用户名</label>
         <div class="input-wrap">
           <i class="fas fa-user" aria-hidden="true"></i>
-          <input id="user" name="username" type="text" placeholder="请输入管理员账号"
+          <input id="user" name="username" type="text" placeholder="请输入用户名"
                  autocomplete="username" required autofocus aria-required="true" value="admin">
         </div>
       </div>
       <div class="fg">
-        <label for="pw">管理员密码</label>
+        <label for="pw">密码</label>
         <div class="input-wrap">
           <i class="fas fa-key" aria-hidden="true"></i>
-          <input id="pw" name="password" type="password" placeholder="请输入管理员密码"
+          <input id="pw" name="password" type="password" placeholder="请输入密码"
                  autocomplete="current-password" required aria-required="true">
           <button class="password-toggle" id="pw-toggle" type="button" aria-label="显示密码">
             <i class="far fa-eye" aria-hidden="true"></i>
           </button>
         </div>
       </div>
-      <p class="form-helper">账号默认 <code>admin</code>；忘记密码可在后台「设置」中修改，或在 Cloudflare 控制台调整 <code>ADMIN_USER</code> / <code>ADMIN_PASSWORD</code> 变量。</p>
+      <p class="form-helper">首个管理员账号默认 <code>admin</code>，由部署时的 <code>ADMIN_PASSWORD</code> 决定；成员账号请在后台「用户管理」中创建。</p>
       <button class="btn btn-p btn-submit" type="submit">
         <span class="button-label"><i class="fas fa-right-to-bracket" aria-hidden="true"></i>登录控制台</span>
       </button>
@@ -360,12 +362,16 @@ ${FOOTER}
 }
 
 /** 后台单页骨架（数据由 /admin/app.js 拉取渲染） */
-export function renderAdminPage(opts: { baseUrl: string }): string {
+export function renderAdminPage(opts: { baseUrl: string; user?: { username: string; role: string } }): string {
   const navLink = (view: string, icon: string, label: string) =>
     `<a class="admin-nav__link" data-view="${view}" href="#${view}"><i class="${icon}" aria-hidden="true"></i><span>${label}</span></a>`
 
   const mobileNav = (view: string, label: string) =>
     `<a data-view="${view}" href="#${view}">${label}</a>`
+
+  const isAdmin = opts.user?.role === 'admin'
+  const username = opts.user?.username ?? ''
+  const role = opts.user?.role ?? 'member'
 
   return shell(
     '控制台 · 草稿推送网关',
@@ -379,12 +385,14 @@ export function renderAdminPage(opts: { baseUrl: string }): string {
     </div>
     <nav class="admin-nav" aria-label="功能导航">
       ${navLink('dashboard', 'fas fa-chart-pie', '概览')}
-      ${navLink('accounts', 'fas fa-layer-group', '公众号管理')}
+      ${navLink('accounts', 'fas fa-layer-group', '账号管理')}
       ${navLink('records', 'fas fa-receipt', '推送记录')}
       ${navLink('drafts', 'fas fa-inbox', '草稿箱')}
       ${navLink('tokens', 'fas fa-key', '令牌管理')}
       ${navLink('docs', 'fas fa-book', '接口文档')}
-      ${navLink('settings', 'fas fa-gear', '设置')}
+      ${isAdmin ? navLink('audit', 'fas fa-clipboard-list', '操作日志') : ''}
+      ${isAdmin ? navLink('users', 'fas fa-users-gear', '用户管理') : ''}
+      ${isAdmin ? navLink('settings', 'fas fa-gear', '设置') : ''}
     </nav>
     <div class="admin-rail__foot">
       <button class="admin-nav__link rail-toggle" type="button" id="rail-toggle">
@@ -402,12 +410,14 @@ export function renderAdminPage(opts: { baseUrl: string }): string {
       </a>
       <nav aria-label="移动端功能导航">
         ${mobileNav('dashboard', '概览')}
-        ${mobileNav('accounts', '公众号')}
+        ${mobileNav('accounts', '账号')}
         ${mobileNav('records', '记录')}
         ${mobileNav('drafts', '草稿')}
         ${mobileNav('tokens', '令牌')}
         ${mobileNav('docs', '文档')}
-        ${mobileNav('settings', '设置')}
+        ${isAdmin ? mobileNav('audit', '日志') : ''}
+        ${isAdmin ? mobileNav('users', '用户') : ''}
+        ${isAdmin ? mobileNav('settings', '设置') : ''}
       </nav>
       <a class="icon-btn" href="/admin/logout" aria-label="退出登录">
         <i class="fas fa-right-from-bracket" aria-hidden="true"></i>
@@ -421,6 +431,7 @@ export function renderAdminPage(opts: { baseUrl: string }): string {
 </div>
 <div class="toasts" id="toasts"></div>
 <script>window.__BASE__ = ${JSON.stringify(opts.baseUrl)};</script>
+<script>window.__ME__ = ${JSON.stringify({ username, role })};</script>
 <script src="/admin/app.js"></script>
 <script>
 (function () {
